@@ -5,8 +5,13 @@ set -euo pipefail
 # Produces .deb, .rpm, and AppImage from the official macOS DMG.
 
 # ----- Configurable -----
-DMG_URL_AMD64="${DMG_URL_AMD64:-https://desktop.claude.ai/mac/Claude-darwin-x64.dmg}"
-DMG_URL_ARM64="${DMG_URL_ARM64:-https://desktop.claude.ai/mac/Claude-darwin-arm64.dmg}"
+# The DMG redirect URL on claude.ai is session-scoped (token rotates), so we
+# discover it fresh on each build by scraping claude.com/download.
+# Override with DMG_URL_UNIVERSAL=<url> to pin a specific download.
+DOWNLOAD_PAGE_URL="${DOWNLOAD_PAGE_URL:-https://claude.com/download}"
+DMG_URL_UNIVERSAL="${DMG_URL_UNIVERSAL:-}"
+DMG_URL_AMD64="${DMG_URL_AMD64:-}"
+DMG_URL_ARM64="${DMG_URL_ARM64:-}"
 MAINTAINER="${MAINTAINER:-shubham151 <shubham.cmishra@gmail.com>}"
 PKG_NAME="claude-desktop"
 
@@ -51,19 +56,57 @@ detect_arch() {
   esac
 }
 
+resolve_dmg_url() {
+  # Scrape the public download page for the current macOS DMG redirect URL.
+  # The redirect endpoint uses a session-scoped token that changes per request,
+  # but the path shape is stable: /redirect/<token>/api/desktop/darwin/universal/dmg/latest/redirect
+  local ua="Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+  local html
+  html="$(curl -fsSL -A "$ua" "$DOWNLOAD_PAGE_URL")" || die "failed to fetch $DOWNLOAD_PAGE_URL"
+
+  local url
+  url="$(printf '%s' "$html" \
+    | grep -oE 'https://claude\.ai/[^"'"'"']*api/desktop/darwin/universal/dmg/latest/redirect' \
+    | head -n1)"
+
+  # Fallback: relative path variant.
+  if [[ -z "$url" ]]; then
+    local rel
+    rel="$(printf '%s' "$html" \
+      | grep -oE '/redirect/[^"'"'"']*api/desktop/darwin/universal/dmg/latest/redirect' \
+      | head -n1)"
+    [[ -n "$rel" ]] && url="https://claude.ai$rel"
+  fi
+
+  [[ -n "$url" ]] || die "could not find DMG URL on $DOWNLOAD_PAGE_URL (upstream HTML changed?)"
+  echo "$url"
+}
+
 dmg_url_for_arch() {
-  case "$1" in
-    amd64) echo "$DMG_URL_AMD64" ;;
-    arm64) echo "$DMG_URL_ARM64" ;;
-    *) die "unknown arch: $1" ;;
+  local arch="$1" override=""
+  case "$arch" in
+    amd64) override="$DMG_URL_AMD64" ;;
+    arm64) override="$DMG_URL_ARM64" ;;
+    *) die "unknown arch: $arch" ;;
   esac
+  if [[ -n "$override" ]]; then
+    echo "$override"
+    return
+  fi
+  if [[ -z "${DMG_URL_UNIVERSAL}" ]]; then
+    DMG_URL_UNIVERSAL="$(resolve_dmg_url)"
+    log "resolved DMG URL: $DMG_URL_UNIVERSAL"
+  fi
+  echo "$DMG_URL_UNIVERSAL"
 }
 
 # ----- Steps -----
 download_dmg() {
   local url="$1" out="$2"
   log "downloading DMG: $url"
-  curl -fL --retry 3 -o "$out" "$url"
+  curl -fL --retry 3 \
+    -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" \
+    -o "$out" "$url"
 }
 
 extract_dmg() {

@@ -18,8 +18,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DMG_URL_AMD64: https://desktop.claude.ai/mac/Claude-darwin-x64.dmg
-  DMG_URL_ARM64: https://desktop.claude.ai/mac/Claude-darwin-arm64.dmg
+  # build.sh scrapes https://claude.com/download at build time to discover the
+  # current DMG redirect URL (its session token rotates), so we don't pin it here.
+  # Override via repository variable DMG_URL_UNIVERSAL if needed.
+  DMG_URL_UNIVERSAL: ${{ vars.DMG_URL_UNIVERSAL }}
   # Opt into Node.js 24 for all JavaScript-based actions ahead of the 2026-06-02 default.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -29,6 +31,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       should_build: ${{ steps.gate.outputs.should_build }}
+      dmg_url: ${{ steps.resolve.outputs.url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,12 +43,35 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends p7zip-full curl
 
+      - name: Resolve DMG URL
+        id: resolve
+        run: |
+          set -euo pipefail
+          UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+          if [[ -n "${DMG_URL_UNIVERSAL:-}" ]]; then
+            URL="$DMG_URL_UNIVERSAL"
+          else
+            HTML="$(curl -fsSL -A "$UA" https://claude.com/download)"
+            URL="$(printf '%s' "$HTML" | grep -oE 'https://claude\.ai/[^"'"'"']*api/desktop/darwin/universal/dmg/latest/redirect' | head -n1)"
+            if [[ -z "$URL" ]]; then
+              REL="$(printf '%s' "$HTML" | grep -oE '/redirect/[^"'"'"']*api/desktop/darwin/universal/dmg/latest/redirect' | head -n1)"
+              [[ -n "$REL" ]] && URL="https://claude.ai$REL"
+            fi
+          fi
+          [[ -n "$URL" ]] || { echo "could not resolve DMG URL"; exit 1; }
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $URL"
+
       - name: Detect upstream version
         id: ver
+        env:
+          DMG_URL: ${{ steps.resolve.outputs.url }}
         run: |
           set -euo pipefail
           mkdir -p build/probe
-          curl -fL -o build/probe/claude.dmg "$DMG_URL_AMD64"
+          curl -fL --retry 3 \
+            -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" \
+            -o build/probe/claude.dmg "$DMG_URL"
           7z x -y -obuild/probe/dmg build/probe/claude.dmg >/dev/null
           APP="$(find build/probe/dmg -maxdepth 4 -name 'Claude.app' -type d | head -n1)"
           if [[ -z "$APP" ]]; then
@@ -100,6 +126,7 @@ jobs:
         env:
           ARCH_OVERRIDE: ${{ matrix.arch }}
           APPIMAGE_EXTRACT_AND_RUN: '1'   # run appimagetool without FUSE
+          DMG_URL_UNIVERSAL: ${{ needs.preflight.outputs.dmg_url }}
         run: |
           chmod +x build.sh
           ./build.sh
