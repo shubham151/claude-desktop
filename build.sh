@@ -20,6 +20,14 @@ OUT_DIR="${ROOT_DIR}/dist"
 log() { printf '\033[1;34m[build]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# ----- Compile TS shims -----
+compile_ts() {
+  log "compiling TypeScript shims"
+  ( cd "$ROOT_DIR" && npm install --no-audit --no-fund --silent && npx tsc -p tsconfig.json )
+  [[ -f "$ROOT_DIR/build-ts/claude-native-bindings.js" ]] || die "TS compile failed: claude-native-bindings.js missing"
+  [[ -f "$ROOT_DIR/build-ts/frame-fix-wrapper.js" ]] || die "TS compile failed: frame-fix-wrapper.js missing"
+}
+
 # ----- Dependency check -----
 check_deps() {
   local missing=()
@@ -81,7 +89,7 @@ patch_native_bindings() {
   local target="$extracted/node_modules/claude-native/index.js"
   [[ -f "$target" ]] || die "claude-native/index.js not found at $target"
   log "replacing native bindings shim"
-  cp "$ROOT_DIR/native/claude-native-bindings.js" "$target"
+  cp "$ROOT_DIR/build-ts/claude-native-bindings.js" "$target"
   # Remove any prebuilt .node binaries packaged alongside
   find "$extracted/node_modules/claude-native" -name '*.node' -delete || true
 }
@@ -95,7 +103,7 @@ inject_frame_patch() {
   local orig_main
   orig_main="$(node -e "console.log(require('$pkg').main || 'index.js')")"
 
-  cp "$ROOT_DIR/patches/frame-fix-wrapper.js" "$extracted/frame-fix-wrapper.js"
+  cp "$ROOT_DIR/build-ts/frame-fix-wrapper.js" "$extracted/frame-fix-wrapper.js"
 
   # Record original main for the wrapper to require.
   node -e "
@@ -277,6 +285,8 @@ main() {
 
   rm -rf "$BUILD_DIR"
   mkdir -p "$WORK_DIR" "$OUT_DIR"
+
+  compile_ts
 
   local dmg="$WORK_DIR/claude.dmg"
   download_dmg "$(dmg_url_for_arch "$arch")" "$dmg"

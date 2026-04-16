@@ -2,6 +2,7 @@ IMPLEMENTATION.md
 
 # Build artifacts
 build/
+build-ts/
 dist/
 
 # Node

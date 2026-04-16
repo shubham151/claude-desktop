@@ -20,6 +20,8 @@ concurrency:
 env:
   DMG_URL_AMD64: https://desktop.claude.ai/mac/Claude-darwin-x64.dmg
   DMG_URL_ARM64: https://desktop.claude.ai/mac/Claude-darwin-arm64.dmg
+  # Opt into Node.js 24 for all JavaScript-based actions ahead of the 2026-06-02 default.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   preflight:
@@ -31,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install probe tools
         run: |
@@ -87,7 +89,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install build deps
         run: |

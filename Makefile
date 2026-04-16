@@ -10,15 +10,20 @@ deps:
 build:
 	ARCH_OVERRIDE=$(ARCH) ./build.sh
 
+ts:
+	npm install --no-audit --no-fund
+	npx tsc -p tsconfig.json
+
 lint:
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed"; exit 1; }
 	shellcheck build.sh scripts/install-deps.sh
+	npx tsc -p tsconfig.json --noEmit
 
 dist:
 	@ls -la dist/ 2>/dev/null || echo "no dist/ yet — run 'make build'"
 
 clean:
-	rm -rf build dist
+	rm -rf build build-ts dist
 
 help:
 	@echo "Targets:"
