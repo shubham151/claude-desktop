@@ -1,0 +1,11 @@
+Package: claude-desktop
+Version: 0.0.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: electron, libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils
+Maintainer: shubham151 <shubham.cmishra@gmail.com>
+Description: Claude Desktop for Linux (unofficial repackage)
+ Unofficial Linux repackage of Anthropic's Claude Desktop built by
+ repacking the official macOS application with a Linux-compatible
+ native bindings shim. Runs on system Electron.

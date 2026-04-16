@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Claude
+GenericName=Claude Desktop
+Comment=Anthropic's Claude, on your desktop
+Exec=/usr/bin/claude-desktop %U
+Icon=claude-desktop
+Type=Application
+Categories=Office;Utility;Network;
+StartupWMClass=Claude
+Terminal=false

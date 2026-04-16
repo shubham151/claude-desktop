@@ -1,0 +1,32 @@
+IMPLEMENTATION.md
+
+# Build artifacts
+build/
+dist/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Extracted upstream assets (never commit — proprietary)
+*.dmg
+*.asar
+app-extracted/
+icons/*.png
+
+# Local overrides
+.env
+.env.local

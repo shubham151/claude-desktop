@@ -1,0 +1,157 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Build and release even if tag already exists'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 6 * * 1'  # weekly, Monday 06:00 UTC
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+env:
+  DMG_URL_AMD64: https://desktop.claude.ai/mac/Claude-darwin-x64.dmg
+  DMG_URL_ARM64: https://desktop.claude.ai/mac/Claude-darwin-arm64.dmg
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      should_build: ${{ steps.gate.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install probe tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends p7zip-full curl
+
+      - name: Detect upstream version
+        id: ver
+        run: |
+          set -euo pipefail
+          mkdir -p build/probe
+          curl -fL -o build/probe/claude.dmg "$DMG_URL_AMD64"
+          7z x -y -obuild/probe/dmg build/probe/claude.dmg >/dev/null
+          APP="$(find build/probe/dmg -maxdepth 4 -name 'Claude.app' -type d | head -n1)"
+          if [[ -z "$APP" ]]; then
+            echo "Claude.app not found in DMG" >&2
+            exit 1
+          fi
+          npx --yes @electron/asar extract-file \
+            "$APP/Contents/Resources/app.asar" package.json \
+            > build/probe/package.json
+          V="$(node -e "console.log(require('./build/probe/package.json').version)")"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Upstream version: $V"
+
+      - name: Decide whether to build
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          TAG="v${{ steps.ver.outputs.version }}"
+          if [[ "$FORCE" == "true" ]]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "force=true — will build"
+          elif gh release view "$TAG" >/dev/null 2>&1; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "release $TAG already exists — skipping"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install build deps
+        run: |
+          chmod +x scripts/install-deps.sh
+          ./scripts/install-deps.sh ci
+
+      - name: Build packages
+        env:
+          ARCH_OVERRIDE: ${{ matrix.arch }}
+          APPIMAGE_EXTRACT_AND_RUN: '1'   # run appimagetool without FUSE
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Verify artifacts
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          DEB="dist/claude-desktop_${VERSION}_${ARCH}.deb"
+          APPIMG_GLOB="dist/claude-desktop-${VERSION}-${ARCH}.AppImage"
+          RPM_ARCH=$([ "$ARCH" = "amd64" ] && echo x86_64 || echo aarch64)
+          RPM_GLOB="dist/claude-desktop-${VERSION}-1.*.${RPM_ARCH}.rpm"
+          test -s "$DEB"            || { echo "missing/empty deb: $DEB"; exit 1; }
+          test -s "$APPIMG_GLOB"    || { echo "missing/empty appimage: $APPIMG_GLOB"; exit 1; }
+          ls -1 $RPM_GLOB           >/dev/null || { echo "missing rpm: $RPM_GLOB"; exit 1; }
+          echo "artifacts OK"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [preflight, build]
+    if: needs.preflight.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show artifacts
+        run: ls -la dist/
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — uploading/overwriting assets"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "Claude Desktop $VERSION" \
+              --notes "Automated build of Claude Desktop $VERSION (unofficial Linux repackage)."
+          fi
